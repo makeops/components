@@ -21,6 +21,8 @@ import {createHash, randomUUID} from 'crypto';
 import {readFileSync} from 'fs';
 import {join} from 'path';
 
+import {createDebug, log} from '../log';
+
 /** Includes the initial PROVIDE_AUTH_PARAMETERS round. */
 const MAX_CUSTOM_CHALLENGE_ATTEMPTS = 3;
 const TOKEN_TTL_SECONDS = 60 * 15;
@@ -29,6 +31,7 @@ const LOGIN_LINK_PLACEHOLDER = '{{LOGIN_LINK}}';
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const ses = new SESClient({});
 const kms = new KMSClient({});
+const debug = createDebug('auth:magic-link');
 
 /** Bundled beside the handler via NodejsFunction commandHooks. */
 const emailTextTemplate = readFileSync(join(__dirname, 'magic-link.txt'), 'utf8');
@@ -57,22 +60,6 @@ function allowedRedirectUrls(): string[] {
       .split(',')
       .map((url) => url.trim())
       .filter(Boolean);
-}
-
-function isDebugEnabled(): boolean {
-  const value = (process.env.DEBUG ?? '').trim().toLowerCase();
-  return value === '1' || value === 'true' || value === 'yes' || value === 'debug';
-}
-
-function debug(message: string, data?: unknown): void {
-  if (!isDebugEnabled()) {
-    return;
-  }
-  if (data === undefined) {
-    console.log(`[auth:magic-link] ${message}`);
-    return;
-  }
-  console.log(`[auth:magic-link] ${message}`, JSON.stringify(data));
 }
 
 function encodeBase64Url(value: string|Buffer|Record<string, unknown>): string {
@@ -159,7 +146,7 @@ async function verifyJwt(token: string): Promise<JwtClaims|undefined> {
   return {sid: payload.sid, exp: payload.exp};
 }
 
-function recipientEmail(event: CreateAuthChallengeTriggerEvent): string {
+function recipientEmail(event: CreateAuthChallengeTriggerEvent): string|undefined {
   const email = event.request.userAttributes?.email?.trim();
   if (email) {
     return email;
@@ -167,7 +154,7 @@ function recipientEmail(event: CreateAuthChallengeTriggerEvent): string {
   if (event.userName.includes('@')) {
     return event.userName;
   }
-  throw new Error('No email available to send magic link');
+  return undefined;
 }
 
 async function sendEmail(to: string, loginLink: string): Promise<void> {
@@ -191,13 +178,15 @@ async function sendEmail(to: string, loginLink: string): Promise<void> {
 }
 
 async function createAndSendMagicLink(
-    event: CreateAuthChallengeTriggerEvent, redirectUrl: string): Promise<void> {
+    event: CreateAuthChallengeTriggerEvent,
+    redirectUrl: string,
+    to: string,
+    ): Promise<void> {
   const sid = randomUUID();
   const iat = Math.floor(Date.now() / 1000);
   const exp = iat + TOKEN_TTL_SECONDS;
   const keyId = requireEnv('MAGIC_LINK_SIGN_KEY_ARN');
   const table = requireEnv('MAGIC_LINK_TABLE_NAME');
-  const to = recipientEmail(event);
 
   const token = await signJwt({sid, exp, username: event.userName});
 
@@ -209,7 +198,7 @@ async function createAndSendMagicLink(
 
   const loginLink = `${redirectUrl}?token=${encodeURIComponent(token)}`;
   // Dev: log full URL; never put it in the Cognito challenge response.
-  console.log(`[magic-link] email=${to} url=${loginLink}`);
+  log('INFO', 'auth:magic-link', 'magic link created', {email: to, url: loginLink});
 
   await sendEmail(to, loginLink);
   debug('emailed', {sid, username: event.userName, to, redirectUrl});
@@ -264,13 +253,13 @@ export async function verifyMagicLink(token: string, username: string): Promise<
       if (name === 'ConditionalCheckFailedException') {
         return false;
       }
-      console.error('[auth:magic-link] failed to mark used', err);
+      log('ERROR', 'auth:magic-link', 'failed to mark used', err);
       return false;  // fail closed
     }
 
     return true;
   } catch (err) {
-    console.error('[auth:magic-link] verify error', err);
+    log('ERROR', 'auth:magic-link', 'verify error', err);
     return false;
   }
 }
@@ -358,7 +347,22 @@ export async function handleCreateAuthChallenge(
     return event;
   }
 
-  await createAndSendMagicLink(event, redirectUrl);
+  const to = recipientEmail(event);
+  if (!to) {
+    // Soft-fail: throwing here becomes a Cognito Lambda error and breaks the
+    // challenge round. User likely has no email attribute (username-only).
+    log('ERROR', 'auth:magic-link', 'no email available to send magic link', {
+      userName: event.userName,
+    });
+    return event;
+  }
+
+  try {
+    await createAndSendMagicLink(event, redirectUrl, to);
+  } catch (err) {
+    log('ERROR', 'auth:magic-link', 'failed to create/send magic link', err);
+    return event;
+  }
 
   event.response.challengeMetadata = 'MAGIC_LINK';
   event.response.privateChallengeParameters = {challenge: 'PROVIDE_MAGIC_LINK'};

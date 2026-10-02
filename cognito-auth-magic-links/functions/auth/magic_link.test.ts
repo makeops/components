@@ -381,6 +381,28 @@ describe('handleCreateAuthChallenge', () => {
     };
     expect(sesInput.Destination.ToAddresses).toEqual(['alias@example.com']);
   });
+
+  it('soft-fails when neither email attribute nor username is an email', async () => {
+    const result = await handleCreateAuthChallenge(baseCreate({
+      userName: 'local-only-user',
+      email: '',
+    }));
+
+    expect(mockSesSend).not.toHaveBeenCalled();
+    expect(mockKmsSend).not.toHaveBeenCalled();
+    expect(result.response.challengeMetadata).toBe('');
+    expect(console.error).toHaveBeenCalled();
+  });
+
+  it('soft-fails when create/send throws', async () => {
+    mockKmsSend.mockRejectedValueOnce(new Error('kms down'));
+
+    const result = await handleCreateAuthChallenge(baseCreate());
+
+    expect(mockSesSend).not.toHaveBeenCalled();
+    expect(result.response.challengeMetadata).toBe('');
+    expect(console.error).toHaveBeenCalled();
+  });
 });
 
 describe('verifyMagicLink / handleVerifyAuthChallenge', () => {

@@ -11,6 +11,7 @@ import type {
   VerifyAuthChallengeResponseTriggerEvent,
 } from 'aws-lambda';
 
+import {createDebug, log} from '../log';
 import {
   handleCreateAuthChallenge,
   handleDefineAuthChallenge,
@@ -23,21 +24,7 @@ type AuthTriggerEvent =
     | VerifyAuthChallengeResponseTriggerEvent
     | PreTokenGenerationV2TriggerEvent;
 
-function isDebugEnabled(): boolean {
-  const value = (process.env.DEBUG ?? '').trim().toLowerCase();
-  return value === '1' || value === 'true' || value === 'yes' || value === 'debug';
-}
-
-function debug(message: string, data?: unknown): void {
-  if (!isDebugEnabled()) {
-    return;
-  }
-  if (data === undefined) {
-    console.log(`[auth] ${message}`);
-    return;
-  }
-  console.log(`[auth] ${message}`, JSON.stringify(data));
-}
+const debug = createDebug('auth');
 
 function magicLinksEnabled(): boolean {
   return (process.env.MAGIC_LINK_ENABLED ?? '').trim().toLowerCase() === 'true';
@@ -68,7 +55,7 @@ export async function handler(event: AuthTriggerEvent): Promise<AuthTriggerEvent
 
     default: {
       const triggerSource = (event as {triggerSource?: string}).triggerSource;
-      console.warn(`[auth] unhandled triggerSource: ${triggerSource}`);
+      log('WARN', 'auth', 'unhandled triggerSource', {triggerSource});
       return event;
     }
   }

@@ -7,16 +7,22 @@ import {PolicyStatement} from 'aws-cdk-lib/aws-iam';
 import {Key, KeySpec, KeyUsage} from 'aws-cdk-lib/aws-kms';
 import {Runtime} from 'aws-cdk-lib/aws-lambda';
 import {NodejsFunction} from 'aws-cdk-lib/aws-lambda-nodejs';
-import {RemovalPolicy} from 'aws-cdk-lib/core';
+import {Duration, RemovalPolicy} from 'aws-cdk-lib/core';
 import {Construct} from 'constructs';
 import {join} from 'path';
 
 const FUNCTIONS_DIR = join(__dirname, 'functions');
 const CONTENT_DIR = join(__dirname, 'content');
 
+/** Physical name prefix for Lambdas and the magic-link table. */
+const RESOURCE_PREFIX = 'cognito-auth-magic-links';
+
 /** Magic-link feature wiring supplied by the deployer. */
 export interface MagicLinkConfig {
-  /** Verified SES identity used as From address. */
+  /**
+   * SES From address. Must already be a verified identity in the deploy
+   * account/region (this construct does not create one).
+   */
   fromEmail: string;
   fromName?: string;
   /** Email subject line. Default: `Your sign-in link`. */
@@ -45,6 +51,11 @@ export interface CognitoClientConfig {
 
 /** Props for {@link CognitoAuthMagicLinks}. */
 export interface CognitoAuthMagicLinksProps {
+  /**
+   * Optional project suffix appended to Lambda and DynamoDB physical names
+   * (e.g. `cognito-auth-magic-links-auth-myapp`).
+   */
+  projectId?: string;
   /** Verbose logs on the Cognito trigger Lambda. Default: `true`. */
   authDebug?: string;
   /** Verbose logs on the adapter Lambda. Default: `true`. */
@@ -53,6 +64,12 @@ export interface CognitoAuthMagicLinksProps {
   magicLink?: MagicLinkConfig;
   /** User Pool + app client used by the API adapter Lambda. */
   cognito?: CognitoClientConfig;
+}
+
+/** Builds a stable physical name, optionally suffixed with `projectId`. */
+function resourceName(base: string, projectId?: string): string {
+  const suffix = projectId?.trim();
+  return suffix ? `${base}-${suffix}` : base;
 }
 
 /**
@@ -68,6 +85,7 @@ export class CognitoAuthMagicLinks extends Construct {
   constructor(scope: Construct, id: string, props: CognitoAuthMagicLinksProps = {}) {
     super(scope, id);
 
+    const projectId = props.projectId?.trim() || undefined;
     const authDebug = props.authDebug ?? process.env.AUTH_DEBUG ?? 'true';
     const apiDebug = props.apiDebug ?? process.env.API_DEBUG ?? process.env.DEBUG ?? 'true';
     const magicLinkEnabled =
@@ -86,6 +104,7 @@ export class CognitoAuthMagicLinks extends Construct {
       });
 
       this.magicLinkTable = new TableV2(this, 'MagicLinkTable', {
+        tableName: resourceName(`${RESOURCE_PREFIX}-tokens`, projectId),
         partitionKey: {name: 'sid', type: AttributeType.STRING},
         timeToLiveAttribute: 'exp',
         removalPolicy: RemovalPolicy.DESTROY,
@@ -107,9 +126,11 @@ export class CognitoAuthMagicLinks extends Construct {
         props.magicLink?.htmlBody ?? join(CONTENT_DIR, 'magic-link.html');
 
     this.authHandler = new NodejsFunction(this, 'AuthHandler', {
+      functionName: resourceName(`${RESOURCE_PREFIX}-auth`, projectId),
       entry: join(FUNCTIONS_DIR, 'auth', 'auth_handler.ts'),
       handler: 'handler',
       runtime: Runtime.NODEJS_24_X,
+      timeout: Duration.seconds(15),
       description: 'Cognito custom auth + pre-token generation triggers',
       environment: {
         DEBUG: authDebug,
@@ -138,9 +159,12 @@ export class CognitoAuthMagicLinks extends Construct {
     }
 
     this.apiHandler = new NodejsFunction(this, 'ApiHandler', {
+      functionName: resourceName(`${RESOURCE_PREFIX}-api`, projectId),
       entry: join(FUNCTIONS_DIR, 'api', 'auth_handler.ts'),
       handler: 'handler',
       runtime: Runtime.NODEJS_24_X,
+      // Initiate + Respond must wait for CreateAuthChallenge (KMS + SES).
+      timeout: Duration.seconds(20),
       description: 'Adapter Lambda for Cognito auth operations',
       environment: {
         DEBUG: apiDebug,

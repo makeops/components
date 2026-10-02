@@ -33,6 +33,7 @@ export class CognitoAuthMagicLinksStack extends cdk.Stack {
     super(scope, id, props);
 
     this.cognitoAuth = new CognitoAuthMagicLinks(this, 'CognitoAuthMagicLinks', {
+      projectId: props.projectId,
       authDebug: props.authDebug,
       apiDebug: props.apiDebug,
       magicLink: props.magicLink,

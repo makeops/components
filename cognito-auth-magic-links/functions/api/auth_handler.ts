@@ -14,6 +14,8 @@ import {
   RespondToAuthChallengeCommand,
 } from '@aws-sdk/client-cognito-identity-provider';
 
+import {createDebug, isDebugEnabled, log} from '../log';
+
 interface ApiResponse {
   statusCode: number;
   headers?: Record<string, string>;
@@ -28,25 +30,7 @@ interface AdapterRequest {
 }
 
 const cognito = new CognitoIdentityProviderClient({});
-
-function isDebugEnabled(): boolean {
-  const value = (process.env.DEBUG ?? '').trim().toLowerCase();
-  return value === '1' || value === 'true' || value === 'yes' || value === 'debug';
-}
-
-function debug(message: string, data?: unknown): void {
-  if (!isDebugEnabled()) {
-    return;
-  }
-  if (data === undefined) {
-    console.log(`[api] ${message}`);
-    return;
-  }
-  console.log(
-      `[api] ${message}`,
-      typeof data === 'string' ? data : JSON.stringify(data, null, 2),
-  );
-}
+const debug = createDebug('api');
 
 function requireEnv(name: string): string {
   const value = process.env[name]?.trim();
@@ -389,7 +373,7 @@ async function handleRequest(req: AdapterRequest): Promise<ApiResponse> {
 /** Client adapter entrypoint. */
 export async function handler(event: unknown): Promise<ApiResponse|Record<string, unknown>> {
   if (isDebugEnabled()) {
-    console.log('[api] DEBUG enabled');
+    log('INFO', 'api', 'DEBUG enabled');
   }
   debug('invoke', event);
 
