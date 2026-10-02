@@ -36,6 +36,12 @@ export interface MagicLinkConfig {
   enabled?: boolean;
 }
 
+/** Cognito User Pool client the API adapter calls. */
+export interface CognitoClientConfig {
+  userPoolId: string;
+  clientId: string;
+}
+
 /** Props for {@link CognitoAuthMagicLinksStack}. */
 export interface CognitoAuthMagicLinksStackProps extends cdk.StackProps {
   /** Verbose logs on the Cognito trigger Lambda. Default: `true`. */
@@ -44,6 +50,8 @@ export interface CognitoAuthMagicLinksStackProps extends cdk.StackProps {
   apiDebug?: string;
   /** Enable magic-link custom auth (creates table + KMS key). */
   magicLink?: MagicLinkConfig;
+  /** User Pool + app client used by the API adapter Lambda. */
+  cognito?: CognitoClientConfig;
 }
 
 /** CDK stack that creates Cognito trigger and adapter Lambdas. */
@@ -132,8 +140,25 @@ export class CognitoAuthMagicLinksStack extends cdk.Stack {
       description: 'Adapter Lambda for Cognito auth operations',
       environment: {
         DEBUG: apiDebug,
+        ...(props.cognito ? {
+          COGNITO_USER_POOL_ID: props.cognito.userPoolId,
+          COGNITO_CLIENT_ID: props.cognito.clientId,
+        } : {}),
       },
     });
+
+    if (props.cognito) {
+      // InitiateAuth / RespondToAuthChallenge do not support resource-level IAM.
+      this.apiHandler.addToRolePolicy(new PolicyStatement({
+        actions: [
+          'cognito-idp:InitiateAuth',
+          'cognito-idp:RespondToAuthChallenge',
+          'cognito-idp:GetUser',
+          'cognito-idp:GlobalSignOut',
+        ],
+        resources: ['*'],
+      }));
+    }
 
     // Used to test the solution as we build it out.
     this.apiHandler.addFunctionUrl({authType: FunctionUrlAuthType.NONE});

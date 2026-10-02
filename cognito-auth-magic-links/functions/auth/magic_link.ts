@@ -199,7 +199,7 @@ async function createAndSendMagicLink(
   const table = requireEnv('MAGIC_LINK_TABLE_NAME');
   const to = recipientEmail(event);
 
-  const token = await signJwt({sid, exp});
+  const token = await signJwt({sid, exp, username: event.userName});
 
   await ddb.send(new PutCommand({
     TableName: table,
@@ -344,17 +344,17 @@ export async function handleCreateAuthChallenge(
     return event;
   }
 
-  const redirectUrl = resolveRedirectUrl(meta);
-  if (!redirectUrl) {
-    debug('create: redirectUrl not allowlisted', meta.redirectUrl);
-    return event;
-  }
-
   // Client already holds the emailed token (opened the link elsewhere).
   if (meta.haveMagicLinkToken === 'yes') {
     event.response.challengeMetadata = 'MAGIC_LINK';
     event.response.privateChallengeParameters = {challenge: 'PROVIDE_MAGIC_LINK'};
     event.response.publicChallengeParameters = {};
+    return event;
+  }
+
+  const redirectUrl = resolveRedirectUrl(meta);
+  if (!redirectUrl) {
+    debug('create: redirectUrl not allowlisted', meta.redirectUrl);
     return event;
   }
 
