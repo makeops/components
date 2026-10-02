@@ -1,5 +1,5 @@
 {
-  "app": "npx tsc && npx tsx cognito-auth-magic-links-stack.ts",
+  "app": "npx tsc && npx tsx cognito_auth_magic_links_stack.ts",
   "watch": {
     "include": [
       "**"

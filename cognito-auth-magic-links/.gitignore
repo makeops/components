@@ -7,4 +7,4 @@ node_modules
 .cdk.staging
 cdk.out
 
-test-stack.ts
+test_stack.ts
